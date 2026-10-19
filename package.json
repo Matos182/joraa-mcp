@@ -1,0 +1,51 @@
+{
+  "name": "joraa-mcp",
+  "version": "0.1.0",
+  "description": "Servidor MCP para o Jornal Oficial dos Açores (JORAA) e a contratação pública açoriana",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "acores",
+    "azores",
+    "jornal-oficial",
+    "contratacao-publica",
+    "dados-abertos",
+    "open-data"
+  ],
+  "homepage": "https://github.com/Matos182/joraa-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/Matos182/joraa-mcp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Matos182/joraa-mcp"
+  },
+  "license": "MIT",
+  "author": "Fábio Matos",
+  "type": "module",
+  "bin": {
+    "joraa-mcp": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun src/index.ts",
+    "serve": "bun src/serve.ts",
+    "ingest": "bun src/contracts/ingest.ts",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "engines": {
+    "bun": ">=1.4.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "fflate": "^0.8.3",
+    "unpdf": "1.8.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  }
+}
