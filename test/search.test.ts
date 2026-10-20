@@ -1,7 +1,9 @@
 import { beforeAll, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
+import { isAzores, toContract, type BaseRow } from "../src/contracts/base";
+import { openWritableDb, replaceYear } from "../src/contracts/db";
 import { buildSearchSql, ftsQuery, searchContracts } from "../src/contracts/search";
-import { seededDb } from "./fixtures";
+import { rows, seededDb } from "./fixtures";
 
 let db: Database;
 beforeAll(() => {
@@ -10,6 +12,26 @@ beforeAll(() => {
 
 test("só ficam contratos açorianos no índice", () => {
   expect(searchContracts(db, {}).map((c) => c.id)).toEqual(["1001", "1002"]);
+});
+
+test("entidade por variante de grafia (Câmara Municipal vs Município, o mesmo NIF em anos diferentes)", () => {
+  // Base isolada deste teste: a fonte indexou "Município de Angra do Heroísmo"
+  // este ano; noutros anos a mesma entidade (mesmo NIF) aparece como "Câmara
+  // Municipal de Angra do Heroísmo". As duas formas têm de encontrar o contrato,
+  // apesar de nenhuma das palavras "Câmara"/"Municipal" aparecer no texto indexado.
+  const extraRow: BaseRow = {
+    idcontrato: "1003", objectoContrato: "Licenciamento e suporte a software de gestão documental",
+    adjudicante: ["512044040 - Município de Angra do Heroísmo"], adjudicatarios: [],
+    precoContratual: 39556, dataCelebracaoContrato: "13/04/2026",
+    localExecucao: ["Portugal, Região Autónoma dos Açores, Angra do Heroísmo"], NUTs: ["PT200"],
+  };
+  const entityDb = openWritableDb(":memory:");
+  replaceYear(entityDb, 2026, [...rows, extraRow].filter(isAzores).map(toContract));
+
+  expect(searchContracts(entityDb, { entity: "Câmara Municipal de Angra do Heroísmo" }).map((c) => c.id)).toEqual(["1003"]);
+  expect(searchContracts(entityDb, { entity: "Município de Angra do Heroísmo" }).map((c) => c.id)).toEqual(["1003"]);
+  // Só com palavras genéricas (sem nenhuma distintiva) não se esvazia o filtro.
+  expect(searchContracts(entityDb, { entity: "Câmara Municipal" })).toEqual([]);
 });
 
 test("entidade por nome (sem acentos) e por NIF", () => {

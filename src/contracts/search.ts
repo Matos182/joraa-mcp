@@ -14,13 +14,37 @@ export type SearchArgs = {
 export const MAX_TERMS = 8;
 export const MIN_TERM_LENGTH = 2;
 
+const stripDiacritics = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+// Preposições e designações administrativas genéricas: a grafia oficial de uma
+// entidade varia por ano na fonte ("Câmara Municipal de X" num ano, "Município
+// de X" noutro, para o mesmo NIF), e um AND sobre todas as palavras falhava
+// sempre que o utilizador escrevia a forma que a fonte não usou nesse ano.
+// Só entram no filtro quando sobra pelo menos uma palavra fora da lista: uma
+// entidade digitada só com estas palavras não fica sem filtro nenhum.
+const ENTITY_STOPWORDS = new Set(
+  [
+    "de", "da", "do", "das", "dos", "e",
+    "camara", "municipal", "municipio", "concelho",
+    "regiao", "regional", "autonoma", "autonomo",
+    "direcao", "secretaria", "servicos", "municipalizados",
+  ].map(stripDiacritics),
+);
+
+function extractWords(text: string): string[] {
+  return (text.match(/[\p{L}\p{N}]+/gu) ?? []).filter((w) => [...w].length >= MIN_TERM_LENGTH);
+}
+
 // Cada palavra vira um termo FTS entre aspas com prefixo, para o texto do
 // utilizador nunca ser interpretado como sintaxe FTS.
 // null quando não sobra nenhum termo utilizável.
-export function ftsQuery(text: string): string | null {
-  const words = (text.match(/[\p{L}\p{N}]+/gu) ?? [])
-    .filter((w) => [...w].length >= MIN_TERM_LENGTH)
-    .slice(0, MAX_TERMS);
+export function ftsQuery(text: string, opts?: { dropStopwords?: boolean }): string | null {
+  let words = extractWords(text);
+  if (opts?.dropStopwords) {
+    const kept = words.filter((w) => !ENTITY_STOPWORDS.has(stripDiacritics(w.toLowerCase())));
+    if (kept.length) words = kept;
+  }
+  words = words.slice(0, MAX_TERMS);
   return words.length ? words.map((w) => `"${w}"*`).join(" ") : null;
 }
 
@@ -41,7 +65,7 @@ export function buildSearchSql(a: SearchArgs): { sql: string; params: Record<str
       where.push(`c.entity_nif = $nif`);
       params.$nif = e;
     } else {
-      const q = ftsQuery(e);
+      const q = ftsQuery(e, { dropStopwords: true });
       if (q) {
         where.push(`c.rid IN (SELECT rowid FROM contracts_fts WHERE contracts_fts MATCH $ent)`);
         params.$ent = `entity : (${q})`;
