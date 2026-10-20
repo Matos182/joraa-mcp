@@ -31,6 +31,8 @@ Servidor [Model Context Protocol](https://modelcontextprotocol.io) para pesquisa
 
 Um contrato conta como açoriano quando o local de execução refere os Açores ou o código NUTS começa por `PT2`. Os campos que a fonte não fornece vêm a `null` e nunca são inferidos.
 
+Na pesquisa de texto, cada palavra tem de aparecer no contrato: `query: "software licenças"` só devolve contratos com as duas. Para procurar por tema, faz uma pesquisa por palavra e junta os resultados. No campo `entity`, as palavras genéricas como "Câmara", "Municipal", "Município", "Região" ou "Secretaria" são ignoradas quando há outras, porque a grafia oficial de uma entidade muda de ano para ano na fonte. Assim, "Câmara Municipal de Angra do Heroísmo" e "Município de Angra do Heroísmo" encontram os mesmos contratos.
+
 ## Início rápido
 
 Requer [Bun](https://bun.sh) (testado com a versão 1.4.3).
