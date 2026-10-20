@@ -30,6 +30,7 @@
     "start": "bun src/index.ts",
     "serve": "bun src/serve.ts",
     "ingest": "bun src/contracts/ingest.ts",
+    "ingest:avisos": "bun src/avisos/ingest.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"
   },

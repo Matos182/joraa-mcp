@@ -2,6 +2,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import pkg from "../package.json";
+import { countAvisos, getAvisosMeta } from "./avisos/db";
+import { searchAvisos } from "./avisos/search";
+import type { AvisoResult } from "./avisos/types";
 import type { Contract } from "./contracts/base";
 import { countContracts, getMeta } from "./contracts/db";
 import { searchContracts } from "./contracts/search";
@@ -23,7 +26,21 @@ export function summarize(results: Contract[], lastIngest: string | null): strin
   return [head, ...lines, ...more].join("\n");
 }
 
-export function createServer(db: Database) {
+export function summarizeAvisos(results: AvisoResult[], lastIngest: string | null): string {
+  const head = `${results.length} aviso(s) encontrado(s)${lastIngest ? `; índice atualizado em ${lastIngest}` : ""}. ` +
+    "Os dados completos estão em structuredContent.";
+  const lines = results.slice(0, 8).map((a) => {
+    const title = a.title && a.title.length > 80 ? `${a.title.slice(0, 79)}…` : a.title;
+    const amount = a.amount_eur === null ? "montante n/d" : `${a.amount_eur} EUR`;
+    const window = a.starts_on && a.ends_on ? `${a.starts_on}–${a.ends_on}` : "sem janela";
+    return `- ${a.code} · ${title ?? "título n/d"} · ${a.program ?? "programa n/d"} · ${a.status ?? "estado n/d"} · ${amount} · ${window} · ${a.source_url}`;
+  });
+  const more = results.length > 8 ? [`(+${results.length - 8} em structuredContent)`] : [];
+  // O texto da fonte não pode introduzir linhas extra nem parecer JSON.
+  return [head, ...lines, ...more].map((line) => line.replace(/[{}\r\n\u2028\u2029]/g, " ")).join("\n");
+}
+
+export function createServer(db: Database, avisos?: Database | Error) {
   const server = new McpServer({ name: "joraa-mcp", version: pkg.version });
 
   server.registerTool(
@@ -60,6 +77,60 @@ export function createServer(db: Database) {
         content: [{ type: "text", text: summarize(results, lastIngest) }],
         structuredContent: payload,
       };
+    },
+  );
+
+  server.registerTool(
+    "avisos_search",
+    {
+      title: "Pesquisar avisos de financiamento",
+      description:
+        "Pesquisa avisos PT2030 do dados.gov.pt (folha de cálculo mensal) e o plano de avisos do Açores 2030. " +
+        "O estado vem da data do instantâneo da fonte (snapshot_date), não de hoje. " +
+        "As linhas da folha nacional trazem estado e montantes, mas não datas de candidatura nem tipo de beneficiário. " +
+        "As linhas do plano regional trazem janelas de candidatura e tipo de beneficiário, mas não estado. " +
+        "A dimensão da empresa (micro, pequena) não existe em nenhuma fonte, por isso não há filtro de dimensão. " +
+        "Um aviso repartido por vários fundos ou objetivos aparece uma vez por programa, com o montante somado. " +
+        "Campos ausentes vêm a null.",
+      inputSchema: {
+        query: z.string().max(200).optional().describe("Palavras a procurar no título, programa, objetivos e fundos"),
+        program: z.string().max(100).optional().describe("Código ou nome do programa, ex.: 'ACORES2030'"),
+        status: z.enum(["Aberto", "Fechado"]).optional().describe("Estado no instantâneo da fonte nacional"),
+        beneficiary: z.string().max(20).optional().describe("'publica' ou 'privada', sem distinguir acentos nem maiúsculas"),
+        open_on: isoDate.optional().describe("Data dentro da janela de candidatura, incluindo os limites (AAAA-MM-DD)"),
+        limit: z.number().int().min(1).max(100).optional().describe("Máximo de resultados (por omissão 20)"),
+      },
+    },
+    async (args) => {
+      if (avisos === undefined || avisos instanceof Error) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: avisos?.message ?? "O índice de avisos não está disponível. Corre `bun run ingest:avisos` para o criar." }],
+        };
+      }
+      let operation = "contar os avisos";
+      try {
+        if (countAvisos(avisos) === 0) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: "O índice de avisos está vazio. Corre `bun run ingest:avisos` para importar os dados." }],
+          };
+        }
+        operation = "pesquisar o índice de avisos";
+        const results = searchAvisos(avisos, args);
+        operation = "ler a data de atualização do índice de avisos";
+        const lastIngest = getAvisosMeta(avisos, "last_ingest");
+        return {
+          content: [{ type: "text", text: summarizeAvisos(results, lastIngest) }],
+          structuredContent: { count: results.length, last_ingest: lastIngest, results },
+        };
+      } catch {
+        // Identifica a operação sem expor valores do índice presentes no erro.
+        return {
+          isError: true,
+          content: [{ type: "text", text: `Não foi possível ${operation}. Corre \`bun run ingest:avisos\` para o recriar.` }],
+        };
+      }
     },
   );
 

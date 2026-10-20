@@ -27,11 +27,21 @@ Servidor [Model Context Protocol](https://modelcontextprotocol.io) para pesquisa
 | Ferramenta | Estado | Descrição |
 | --- | --- | --- |
 | `contracts_search` | Disponível | Contratos públicos executados nos Açores, filtrados por entidade adjudicante (nome ou NIF), palavras do objeto e datas de celebração. Devolve a entidade, os adjudicatários, o objeto, o valor em euros, a data e a ligação para o contrato no Portal BASE. |
+| `avisos_search` | Disponível | Avisos de financiamento do PT2030 e do plano de avisos do Açores 2030, filtrados por palavras, programa, estado, tipo de beneficiário e data dentro da janela de candidatura. Devolve o código, o título, o programa, os fundos, os objetivos, o montante em euros, o estado, a janela, o tipo de beneficiário e a ligação para a fonte. |
 | `joraa_search` · `joraa_get` | Em desenvolvimento | Publicações do Jornal Oficial por tema, data, série ou entidade, com ligação para o PDF oficial. Aguarda uma via de acesso acordada com o Centro de Edição do Jornal Oficial. |
 
 Um contrato conta como açoriano quando o local de execução refere os Açores ou o código NUTS começa por `PT2`. Os campos que a fonte não fornece vêm a `null` e nunca são inferidos.
 
 Na pesquisa de texto, cada palavra tem de aparecer no contrato: `query: "software licenças"` só devolve contratos com as duas. Para procurar por tema, faz uma pesquisa por palavra e junta os resultados. No campo `entity`, as palavras genéricas como "Câmara", "Municipal", "Município", "Região" ou "Secretaria" são ignoradas quando há outras, porque a grafia oficial de uma entidade muda de ano para ano na fonte. Assim, "Câmara Municipal de Angra do Heroísmo" e "Município de Angra do Heroísmo" encontram os mesmos contratos.
+
+### Avisos de financiamento
+
+`avisos_search` junta duas fontes que nunca se cruzam: cada resultado indica a sua em `source`.
+
+- **Folha nacional PT2030** (`pt2030_xlsx`): uma linha por aviso, fundo e objetivo, com estado e montante. Não traz datas de candidatura nem tipo de beneficiário, que vêm a `null`.
+- **Plano de avisos do Açores 2030** (`acores2030_plano`): janelas de candidatura e tipo de beneficiário. Não traz estado, que vem a `null`.
+
+O estado ("Aberto" ou "Fechado") é o da data do instantâneo da fonte (`snapshot_date`), não o de hoje. Um aviso repartido por vários fundos ou objetivos aparece uma vez por programa, com o montante somado. Nenhuma fonte indica a dimensão da empresa (micro, pequena), por isso não há filtro de dimensão. `beneficiary: "privada"` também encontra avisos para entidades "Pública/Privada".
 
 ## Início rápido
 
@@ -47,6 +57,9 @@ bun run ingest
 # Cobertura completa: todos os anos publicados, de 2012 ao corrente
 bun run ingest $(seq 2012 "$(date +%Y)")
 
+# Importa os avisos de financiamento (opcional)
+bun run ingest:avisos
+
 # Arranca o servidor em stdio
 bun run start
 ```
@@ -56,7 +69,8 @@ O índice fica em `data/contracts.sqlite`. Para usar outro caminho, define `JORA
 - **O índice só cobre os anos importados.** Sem argumentos, o ingest importa apenas o ano corrente; para pesquisar desde 2012, indica todos os anos, como acima.
 - **Só o ingest escreve.** O servidor abre o índice só para leitura e não arranca se o ficheiro não existir: primeiro corre `bun run ingest`. Um índice criado por uma versão anterior, com outro esquema, é recusado e tem de ser importado de novo.
 - **Cada ano é substituído de uma vez**, numa só transação: os contratos que desapareceram da fonte saem do índice. Um ficheiro sem contratos dos Açores é recusado e deixa o índice como estava, e as linhas sem `idcontrato` são rejeitadas.
-- **Downloads controlados.** Só por https e só de `dados.gov.pt`. Cada redirecionamento volta a ser verificado, e cada pedido tem um tempo limite e um teto de bytes (`JORAA_MCP_MAX_DOWNLOAD_BYTES`, 512 MiB por omissão).
+- **Avisos num índice próprio.** `bun run ingest:avisos` cria `data/avisos.sqlite` (outro caminho: `JORAA_MCP_AVISOS_DB`) e substitui tudo numa só transação. Se uma das fontes não devolver avisos, o índice fica como estava. Sem este índice, o servidor arranca na mesma e só `avisos_search` responde com erro a pedir o ingest.
+- **Downloads controlados.** Só por https e só de `dados.gov.pt` (e de `acores.portugal2030.pt`, para os avisos). Cada redirecionamento volta a ser verificado, e cada pedido tem um tempo limite e um teto de bytes (`JORAA_MCP_MAX_DOWNLOAD_BYTES`, 512 MiB por omissão).
 
 ## Configuração num cliente MCP
 
@@ -101,6 +115,7 @@ bun run serve
 | `JORAA_MCP_ALLOWED_ORIGINS` | (vazio) | Origens de browser autorizadas. Pedidos com outro `Origin` recebem 403. |
 | `JORAA_MCP_CACHE_TTL_MS` | `3600000` | Validade da cache dos pedidos às fontes. |
 | `JORAA_MCP_DB` | `data/contracts.sqlite` | Caminho do índice de contratos. |
+| `JORAA_MCP_AVISOS_DB` | `data/avisos.sqlite` | Caminho do índice de avisos. |
 | `JORAA_MCP_MAX_DOWNLOAD_BYTES` | `536870912` | Teto de bytes de cada download do ingest. |
 
 O servidor recusa:
@@ -154,6 +169,8 @@ Notas de configuração:
 | Fonte | Origem | Utilização |
 | --- | --- | --- |
 | Contratos públicos | Dataset do IMPIC *Contratos Públicos — Portal BASE*, em [dados.gov.pt](https://dados.gov.pt/pt/datasets/66d72d488ca4b7cb2de28712/) | Dados abertos, atualizados semanalmente. Um ficheiro por ano, de 2012 em diante. |
+| Avisos PT2030 | Dataset *Avisos PT2030*, em [dados.gov.pt](https://dados.gov.pt/pt/datasets/65afddb4bca3f3b9c6aac069/) | Folha de cálculo mensal; usa-se só o ficheiro `02-datasets-avisos-pt2030-*.xlsx`. O dataset não indica licença (`notspecified`). Montantes publicados em milhares de euros, convertidos para euros. |
+| Plano de avisos Açores 2030 | API pública de [acores.portugal2030.pt](https://acores.portugal2030.pt) | Lista paginada dos avisos planeados. O ingest guarda só os campos do aviso e nunca descarrega os PDFs. |
 | Jornal Oficial | [jo.azores.gov.pt](https://jo.azores.gov.pt), Centro de Edição do Jornal Oficial | A integração só será ativada através de uma via de acesso acordada com a entidade. |
 
 Todos os pedidos às fontes levam um `User-Agent` que identifica o projeto e o repositório, passam por uma cache local e não usam técnicas de contorno de proteções anti-bot.

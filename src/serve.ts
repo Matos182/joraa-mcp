@@ -1,5 +1,6 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Database } from "bun:sqlite";
+import { openAvisosReadOnlyDb } from "./avisos/db";
 import { countContracts, getMeta, openReadOnlyDb } from "./contracts/db";
 import { createServer } from "./server";
 
@@ -7,6 +8,7 @@ const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 export const MAX_BODY_BYTES = 64 * 1024;
 
 export interface HttpOptions {
+  avisos?: Database | Error;
   allowedOrigins?: string[];
   // Nomes pelos quais o servidor pode ser chamado, além do loopback (ex.: o domínio público atrás do proxy).
   allowedHosts?: string[];
@@ -64,7 +66,7 @@ function health(db: Database): Response {
 // Modo stateless: cada pedido HTTP cria o seu servidor MCP e o seu transporte.
 // Não há sessões em memória, por isso o serviço pode reiniciar ou correr em várias
 // instâncias atrás de um balanceador sem perder nada. As tools são só de leitura.
-export function createHttpHandler(db: Database, { allowedOrigins = [], allowedHosts = [] }: HttpOptions = {}) {
+export function createHttpHandler(db: Database, { allowedOrigins = [], allowedHosts = [], avisos }: HttpOptions = {}) {
   const hosts = new Set([...LOOPBACK_HOSTS, ...allowedHosts.map((h) => h.toLowerCase())]);
 
   return async (req: Request): Promise<Response> => {
@@ -103,7 +105,7 @@ export function createHttpHandler(db: Database, { allowedOrigins = [], allowedHo
     }
     if (Array.isArray(parsedBody)) return jsonRpcError(400, -32600, "Invalid Request: batch requests are not supported");
 
-    const server = createServer(db);
+    const server = createServer(db, avisos);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
@@ -143,7 +145,15 @@ if (import.meta.main) {
     console.error(`joraa-mcp: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   }
+  let avisos: Database | Error;
+  try {
+    avisos = openAvisosReadOnlyDb();
+  } catch (e) {
+    avisos = e instanceof Error ? e : new Error(String(e));
+    console.error(`joraa-mcp: ${avisos.message}`);
+  }
   const handler = createHttpHandler(db, {
+    avisos,
     allowedOrigins: list("JORAA_MCP_ALLOWED_ORIGINS"),
     allowedHosts: list("JORAA_MCP_ALLOWED_HOSTS"),
   });
