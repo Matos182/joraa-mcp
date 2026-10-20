@@ -1,6 +1,14 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { openDb } from "./contracts/db";
+import type { Database } from "bun:sqlite";
+import { openReadOnlyDb } from "./contracts/db";
 import { createServer } from "./server";
 
-const server = createServer(openDb());
+let db: Database;
+try {
+  db = openReadOnlyDb();
+} catch (error) {
+  console.error(`joraa-mcp: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
+const server = createServer(db);
 await server.connect(new StdioServerTransport());

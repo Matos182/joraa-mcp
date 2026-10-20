@@ -1,14 +1,11 @@
 import { beforeAll, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
-import { isAzores, toContract } from "../src/contracts/base";
-import { openDb, upsertContracts } from "../src/contracts/db";
-import { searchContracts } from "../src/contracts/search";
-import { rows } from "./fixtures";
+import { buildSearchSql, ftsQuery, searchContracts } from "../src/contracts/search";
+import { seededDb } from "./fixtures";
 
 let db: Database;
 beforeAll(() => {
-  db = openDb(":memory:");
-  upsertContracts(db, rows.filter(isAzores).map(toContract));
+  db = seededDb();
 });
 
 test("só ficam contratos açorianos no índice", () => {
@@ -29,7 +26,7 @@ test("palavras no objeto, datas e sintaxe FTS inofensiva", () => {
   expect(searchContracts(db, { query: 'rede OR NEAR' })).toEqual([]);
 });
 
-test("resultado completo, com valor numérico e link da fonte", () => {
+test("resultado completo, com valor numérico e link da fonte, sem colunas internas", () => {
   const [c] = searchContracts(db, { entity: "EDA" });
   expect(c).toMatchObject({
     entity: "EDA - Electricidade dos Açores, S.A.", contractors: ["500000000 - Empresa Exemplo, Lda"],
@@ -37,9 +34,43 @@ test("resultado completo, com valor numérico e link da fonte", () => {
     source_url: "https://www.base.gov.pt/Base4/pt/detalhe/?type=contratos&id=1001",
   });
   expect(typeof c!.value_eur).toBe("number");
+  expect(Object.keys(c!)).not.toContain("rid");
+  expect(Object.keys(c!)).not.toContain("source_year");
 });
 
 test("não se pesquisam pessoas singulares pelos adjudicatários", () => {
   expect(searchContracts(db, { query: "João Silva" })).toEqual([]);
   expect(searchContracts(db, { entity: "João Silva" })).toEqual([]);
+});
+
+test("ftsQuery guarda no máximo 8 termos de 2 ou mais caracteres", () => {
+  expect(ftsQuery("a b c")).toBeNull();
+  expect(ftsQuery("a ed b ã")).toBe(`"ed"*`);
+  expect(ftsQuery("ão")).toBe(`"ão"*`);
+  const many = Array.from({ length: 50 }, (_, i) => `t${i}`).join(" ");
+  expect(ftsQuery(many)).toBe(Array.from({ length: 8 }, (_, i) => `"t${i}"*`).join(" "));
+});
+
+test("um filtro de texto sem termos utilizáveis não encontra nada (nunca alarga a pesquisa)", () => {
+  expect(searchContracts(db, { entity: "a" })).toEqual([]);
+  expect(searchContracts(db, { query: "* ( )" })).toEqual([]);
+  expect(searchContracts(db, { entity: "   " }).length).toBe(2);
+});
+
+test("a tabela FTS tem índices de prefixo 2 e 3", () => {
+  const { sql } = db.prepare(`SELECT sql FROM sqlite_master WHERE name = 'contracts_fts'`).get() as { sql: string };
+  expect(sql).toContain("prefix = '2 3'");
+  expect(sql).not.toContain("UNINDEXED");
+});
+
+test("o plano de consulta liga o FTS ao contrato pelo rowid, sem varrer colunas", () => {
+  const { sql, params } = buildSearchSql({ entity: "eda", query: "rede" });
+  const plan = (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(params) as { detail: string }[]).map((r) => r.detail);
+  // O FTS5 aparece sempre como "SCAN ... VIRTUAL TABLE INDEX"; o que conta é ter a restrição MATCH (índice 0:M...).
+  const fts = plan.filter((d) => d.includes("contracts_fts"));
+  expect(fts.length).toBe(2);
+  for (const d of fts) expect(d).toMatch(/VIRTUAL TABLE INDEX 0:M/);
+  // A tabela de contratos nunca é percorrida por uma coluna sem índice.
+  expect(plan.some((d) => /^SCAN c\b/.test(d) && !/USING/.test(d))).toBe(false);
+  expect(plan.some((d) => /SEARCH c USING INTEGER PRIMARY KEY \(rowid=\?\)/.test(d))).toBe(true);
 });

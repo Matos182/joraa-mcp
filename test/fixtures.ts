@@ -1,4 +1,5 @@
-import type { BaseRow } from "../src/contracts/base";
+import { isAzores, toContract, type BaseRow } from "../src/contracts/base";
+import { openWritableDb, replaceYear } from "../src/contracts/db";
 
 export const rows: BaseRow[] = [
   {
@@ -21,3 +22,10 @@ export const rows: BaseRow[] = [
     precoContratual: 9000, dataCelebracaoContrato: "23/02/2026", localExecucao: ["Portugal, Coimbra, Coimbra"], NUTs: null,
   },
 ];
+
+// Índice em memória (ou num ficheiro) com os contratos açorianos das linhas de exemplo.
+export function seededDb(path = ":memory:", year = 2026) {
+  const db = openWritableDb(path);
+  replaceYear(db, year, rows.filter(isAzores).map(toContract));
+  return db;
+}

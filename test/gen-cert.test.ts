@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { isValidHostname } from "../deploy/gen-cert";
+import { isIpLiteral, isValidHostname, subjectAltNames } from "../deploy/gen-cert";
 
 test("aceita nomes DNS em minúsculas e localhost", () => {
   for (const hostname of ["mcp.example.test", "localhost", "a-b.example", `${"a".repeat(63)}.example`, `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(61)}`]) {
@@ -14,6 +14,25 @@ test("recusa injeções, maiúsculas e nomes fora dos limites DNS", () => {
   for (const hostname of ["a,DNS:evil.example", "x/CN=evil", "", "Joraa.example", `${"a".repeat(64)}.example`, "-a.example", "a-.example", "1.2.3.4,IP:5.6.7.8", "example", ".example", "a..example", "a.example.", "a_b.example", "a.example\n", `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(62)}`]) {
     expect(isValidHostname(hostname)).toBe(false);
   }
+});
+
+test("um último rótulo só com dígitos não é um nome DNS", () => {
+  for (const hostname of ["999.1.1.1", "192.0.2.10", "a.123"]) expect(isValidHostname(hostname)).toBe(false);
+  expect(isValidHostname("a.b2")).toBe(true);
+});
+
+test("reconhece IPs literais e recusa formas ambíguas", () => {
+  for (const ip of ["192.0.2.10", "0.0.0.0", "2001:db8::1", "::1"]) expect(isIpLiteral(ip)).toBe(true);
+  for (const bad of ["999.1.1.1", "192.0.2.010", "2001:DB8::1", "[2001:db8::1]", "fe80::1%eth0", "192.0.2.10,IP:192.0.2.11", "::ffff:192.0.2.1"]) {
+    expect(isIpLiteral(bad)).toBe(false);
+  }
+});
+
+test("um IP literal vai para o SAN como IP: e nunca como DNS:", () => {
+  expect(subjectAltNames("192.0.2.10")).toBe("DNS:localhost,IP:127.0.0.1,IP:::1,IP:192.0.2.10");
+  expect(subjectAltNames("2001:db8::1")).toBe("DNS:localhost,IP:127.0.0.1,IP:::1,IP:2001:db8::1");
+  expect(subjectAltNames("127.0.0.1")).toBe("DNS:localhost,IP:127.0.0.1,IP:::1");
+  expect(subjectAltNames("mcp.example.test")).toBe("DNS:localhost,DNS:mcp.example.test,IP:127.0.0.1,IP:::1");
 });
 
 async function run(command: string[], env?: Record<string, string | undefined>): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -72,6 +91,23 @@ test("falhas de escrita e do OpenSSL são comunicadas com contexto", async () =>
     expect(opensslError.stderr).toContain("OpenSSL falhou");
     expect(opensslError.stderr).toContain("req:");
     expect(opensslError.stderr).toContain(join(dir, "joraa.key"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 120_000);
+
+test("um certificado para um IP tem o SAN de IP que o cliente valida", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "joraa-cert-"));
+  try {
+    const generated = await run([process.execPath, script, "192.0.2.10"], { JORAA_CERT_DIR: dir });
+    expect(generated.stderr).toBe("");
+    expect(generated.code).toBe(0);
+    const inspected = await run(["/usr/bin/openssl", "x509", "-noout", "-ext", "subjectAltName", "-in", join(dir, "joraa.crt")]);
+    expect(inspected.code).toBe(0);
+    expect(inspected.stdout).toContain("IP Address:192.0.2.10");
+    expect(inspected.stdout).not.toContain("DNS:192.0.2.10");
+    const checked = await run(["/usr/bin/openssl", "x509", "-noout", "-checkip", "192.0.2.10", "-in", join(dir, "joraa.crt")]);
+    expect(checked.stdout).toContain("does match certificate");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

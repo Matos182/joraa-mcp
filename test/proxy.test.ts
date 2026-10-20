@@ -1,20 +1,21 @@
 import { expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 const base = (process.env.JORAA_PROXY_URL ?? "https://127.0.0.1:8443").replace(/\/$/, "");
 if (new URL(base).protocol !== "https:") throw new Error("JORAA_PROXY_URL tem de usar HTTPS.");
-const cert = resolve(import.meta.dir, "../deploy/certs/joraa.crt");
+// Mesma pasta que deploy/gen-cert.ts usa: JORAA_CERT_DIR ou deploy/certs.
+const cert = join(process.env.JORAA_CERT_DIR ?? resolve(import.meta.dir, "../deploy/certs"), "joraa.crt");
 const certExists = existsSync(cert);
 const ca = certExists ? readFileSync(cert, "utf8") : "";
 const allowedHost = "mcp.example.test";
 let up = false;
 if (!certExists) {
-  console.error("Testes do proxy ignorados: falta deploy/certs/joraa.crt.");
+  console.error(`Testes do proxy ignorados: falta ${cert}.`);
 } else {
   if (!ca.trim()) throw new Error(`O ficheiro de CA está vazio: ${cert}`);
   try {
-    const probe = await fetch(`${base}/health`, { tls: { ca }, signal: AbortSignal.timeout(1500) });
+    const probe = await fetch(`${base}/health`, { headers: { host: allowedHost }, tls: { ca }, signal: AbortSignal.timeout(1500) });
     await probe.arrayBuffer();
     // Qualquer resposta, incluindo 502 com o Bun desligado, obriga a executar os testes.
     up = true;
@@ -46,7 +47,10 @@ test.skipIf(!up)("/health responde por TLS com o Host permitido", async () => {
   const response = await proxyFetch("/health", { headers: { host: allowedHost } });
   expect(response.status).toBe(200);
   const body: unknown = await response.json();
-  expect(body).toEqual({ ok: true });
+  if (!isRecord(body)) throw new Error("Resposta /health sem um objeto JSON.");
+  expect(body.ok).toBe(true);
+  expect(typeof body.contracts).toBe("number");
+  expect(body.contracts as number).toBeGreaterThan(0);
 });
 
 test.skipIf(!up)("initialize atravessa o proxy TLS e identifica o servidor MCP", async () => {
@@ -63,11 +67,16 @@ test.skipIf(!up)("initialize atravessa o proxy TLS e identifica o servidor MCP",
   expect(typeof body.result.protocolVersion).toBe("string");
 });
 
-test.skipIf(!up)("o Host original chega a serve.ts e um nome proibido leva 421", async () => {
-  const response = await proxyFetch("/mcp", { method: "POST", headers: { ...headers, host: "mau.example" }, body: initialize });
-  const body = await response.text();
-  expect(response.status).toBe(421);
-  expect(body).toBe("Host not allowed");
+test.skipIf(!up)("um Host fora do server_name é fechado pelo nginx sem resposta (444)", async () => {
+  const outcome = await proxyFetch("/mcp", { method: "POST", headers: { ...headers, host: "mau.example" }, body: initialize })
+    .then((response) => `HTTP ${response.status}`, (error: unknown) => error);
+  expect(outcome).toBeInstanceOf(Error);
+});
+
+test.skipIf(!up)("a outra rota também fica atrás do limite e responde 404", async () => {
+  const response = await proxyFetch("/nada", { headers: { host: allowedHost } });
+  await response.arrayBuffer();
+  expect(response.status).toBe(404);
 });
 
 test.skipIf(!up)("um Origin proibido atravessa o proxy intacto e leva 403", async () => {

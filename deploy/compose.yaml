@@ -1,5 +1,11 @@
 name: joraa-proxy
 
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   nginx:
     image: nginx:1.30.6-alpine@sha256:970364228b1e4f932abc22d321932816782cca8a20b85a77552a7cfe9acfb3b5
@@ -14,6 +20,16 @@ services:
       - /var/cache/nginx
       - /run
       - /tmp
+    # O mestre corre como root e precisa de exatamente isto (testado com esta imagem,
+    # tirando uma de cada vez): CHOWN para os *_temp em /var/cache/nginx, SETGID e SETUID
+    # para os workers passarem a "nginx". Sem DAC_OVERRIDE, o root do contentor só lê a
+    # chave se for o dono dela: verdade com Docker rootless; com Docker de root, ver o README.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETGID, SETUID]
     security_opt:
       - no-new-privileges:true
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    logging: *logging
     restart: unless-stopped

@@ -42,12 +42,19 @@ bun install
 
 # Importa os contratos do ano corrente (ou indica os anos: bun run ingest 2026 2025)
 bun run ingest
+# Cobertura completa: todos os anos publicados, de 2012 ao corrente
+bun run ingest $(seq 2012 "$(date +%Y)")
 
 # Arranca o servidor em stdio
 bun run start
 ```
 
 O índice fica em `data/contracts.sqlite`. Para usar outro caminho, define `JORAA_MCP_DB`.
+
+- **O índice só cobre os anos importados.** Sem argumentos, o ingest importa apenas o ano corrente; para pesquisar desde 2012, indica todos os anos, como acima.
+- **Só o ingest escreve.** O servidor abre o índice só para leitura e não arranca se o ficheiro não existir: primeiro corre `bun run ingest`. Um índice criado por uma versão anterior, com outro esquema, é recusado e tem de ser importado de novo.
+- **Cada ano é substituído de uma vez**, numa só transação: os contratos que desapareceram da fonte saem do índice. Um ficheiro sem contratos dos Açores é recusado e deixa o índice como estava, e as linhas sem `idcontrato` são rejeitadas.
+- **Downloads controlados.** Só por https e só de `dados.gov.pt`. Cada redirecionamento volta a ser verificado, e cada pedido tem um tempo limite e um teto de bytes (`JORAA_MCP_MAX_DOWNLOAD_BYTES`, 512 MiB por omissão).
 
 ## Configuração num cliente MCP
 
@@ -92,8 +99,19 @@ bun run serve
 | `JORAA_MCP_ALLOWED_ORIGINS` | (vazio) | Origens de browser autorizadas. Pedidos com outro `Origin` recebem 403. |
 | `JORAA_MCP_CACHE_TTL_MS` | `3600000` | Validade da cache dos pedidos às fontes. |
 | `JORAA_MCP_DB` | `data/contracts.sqlite` | Caminho do índice de contratos. |
+| `JORAA_MCP_MAX_DOWNLOAD_BYTES` | `536870912` | Teto de bytes de cada download do ingest. |
 
-O servidor recusa um `Host` fora da lista (421, proteção contra DNS rebinding), um `Origin` não autorizado (403), métodos diferentes de `POST` (405) e corpos acima de 64 KiB. `GET /health` responde `{"ok":true}`.
+O servidor recusa:
+
+- um `Host` malformado ou fora da lista (421, proteção contra DNS rebinding);
+- um `Origin` não autorizado ou vazio (403);
+- métodos diferentes de `POST` (405);
+- *batches* JSON-RPC (400);
+- corpos acima de 64 KiB (413).
+
+Os erros internos respondem só `Internal Server Error`, sem detalhes.
+
+`GET /health` responde `{"ok":true,"contracts":N,"last_ingest":"…"}` quando o índice tem contratos. Com o índice vazio ou ilegível responde 503 com `"ok":false`. Aceita só `GET`.
 
 ## Implementação atrás de nginx (TLS)
 
@@ -112,13 +130,15 @@ docker compose -f deploy/compose.yaml exec nginx nginx -t
 bun test test/proxy.test.ts
 ```
 
-O nginx escuta em `127.0.0.1:8443` e chega ao Bun em `127.0.0.1:3000` através de `network_mode: host`. Para expor o serviço na rede, altera a diretiva `listen` para a interface pretendida e aponta os clientes para `https://<nome>:8443/mcp`.
+O nginx escuta em `127.0.0.1:8443` e chega ao Bun em `127.0.0.1:3000` através de `network_mode: host`. O `server_name` em `deploy/nginx.conf` é `mcp.example.test`: tem de ser o nome do certificado e de `JORAA_MCP_ALLOWED_HOSTS`. Para expor o serviço na rede, altera as duas diretivas `listen` para a interface pretendida e aponta os clientes para `https://<nome>:8443/mcp`.
+
+O contentor do nginx corre com `cap_drop: [ALL]` e só `CHOWN`, `SETGID` e `SETUID`. Sem `DAC_OVERRIDE`, o root do contentor só lê a chave (`0600`) se for o dono do ficheiro, o que acontece com Docker rootless. Com Docker de root, dá a chave ao grupo do serviço (`chmod 640` e `chgrp`) e acrescenta esse grupo em `group_add`. Os testes do proxy leem o certificado de `JORAA_CERT_DIR`, se definido, tal como `deploy/gen-cert.ts`.
 
 | Camada | Responsabilidade |
 | --- | --- |
-| nginx | TLS; limite de 10 pedidos/s por IP em `/mcp` (`burst=20`, recusa imediata com 429); primeiro corte do tamanho do corpo (64 KiB, 413). `/health` fica fora do limite. |
-| `serve.ts` | Verificação de `Host` (421) e `Origin` (403); limite de 64 KiB no transporte MCP. |
-| Schemas Zod | Forma e limites dos argumentos de cada ferramenta, por exemplo `limit` ≤ 100. |
+| nginx | TLS; só o `server_name` configurado recebe resposta, qualquer outro Host vê a ligação fechada (444); limite de 10 pedidos/s por IP em `/mcp` (`burst=20`) e de 2 pedidos/s em `/health` e no resto (`burst=10`), com recusa imediata e 429; até 10 ligações simultâneas por IP (429); prazos de 10 s para cabeçalhos e corpo; primeiro corte do tamanho do corpo (64 KiB, 413). |
+| `serve.ts` | Verificação de `Host` (421) e `Origin` (403); leitura do corpo com teto de 64 KiB (413) antes do transporte MCP; recusa de *batches* (400). |
+| Schemas Zod | Forma e limites dos argumentos de cada ferramenta, por exemplo `limit` ≤ 100 e até 200 caracteres em `entity` e `query`. A pesquisa usa no máximo 8 palavras de 2 ou mais letras por campo. |
 
 Notas de configuração:
 

@@ -1,6 +1,6 @@
 // Um contrato tal como vem no JSON anual do Portal BASE (IMPIC), só os campos usados.
 export type BaseRow = {
-  idcontrato: string;
+  idcontrato: string | number;
   objectoContrato?: string | null;
   descContrato?: string | null;
   adjudicante?: string[] | null;
@@ -55,6 +55,12 @@ export function euros(v: number | string | null | undefined): number | null {
 const nonEmpty = (s: string | null | undefined) => (s && s.trim() ? s.trim() : null);
 const joined = (a: string[] | null | undefined) => (a && a.length ? a.join("; ") : null);
 
+// Sem idcontrato não há chave estável nem link para a fonte: a linha é recusada.
+export function hasContractId(r: { idcontrato?: unknown }): boolean {
+  const id = r.idcontrato;
+  return (typeof id === "string" && id.trim() !== "") || (typeof id === "number" && Number.isFinite(id));
+}
+
 export function sourceUrl(id: string): string {
   return `https://www.base.gov.pt/Base4/pt/detalhe/?type=contratos&id=${encodeURIComponent(id)}`;
 }
@@ -63,7 +69,7 @@ export function toContract(r: BaseRow): Contract {
   const entity = r.adjudicante?.[0] ?? null;
   const m = entity?.match(/^(\d{9})\s*-\s*(.+)$/);
   return {
-    id: String(r.idcontrato),
+    id: String(r.idcontrato).trim(),
     entity: m ? m[2]!.trim() : nonEmpty(entity),
     entity_nif: m ? m[1]! : null,
     contractors: r.adjudicatarios ?? [],
@@ -77,6 +83,6 @@ export function toContract(r: BaseRow): Contract {
     location: joined(r.localExecucao),
     nuts: joined(r.NUTs),
     cpv: joined(r.cpv),
-    source_url: sourceUrl(String(r.idcontrato)),
+    source_url: sourceUrl(String(r.idcontrato).trim()),
   };
 }
