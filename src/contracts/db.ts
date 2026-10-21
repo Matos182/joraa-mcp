@@ -148,6 +148,13 @@ export function getMeta(db: Database, key: string): string | null {
   return (db.prepare(`SELECT value FROM meta WHERE key = ?`).get(key) as { value: string } | null)?.value ?? null;
 }
 
+export function listIngestedYears(db: Database): number[] {
+  const rows = db.prepare("SELECT key FROM meta WHERE key LIKE 'ingested_%'").all() as { key: string }[];
+  return rows.filter(({ key }) => /^ingested_\d{4}$/.test(key))
+    .map(({ key }) => Number(key.slice("ingested_".length)))
+    .sort((a, b) => a - b);
+}
+
 export function countContracts(db: Database): number {
   return (db.prepare(`SELECT count(*) AS n FROM contracts`).get() as { n: number }).n;
 }

@@ -13,6 +13,7 @@ Servidor [Model Context Protocol](https://modelcontextprotocol.io) para pesquisa
 ## Índice
 
 - [O que faz](#o-que-faz)
+- [Prompts e recurso](#prompts-e-recurso)
 - [Início rápido](#início-rápido)
 - [Configuração num cliente MCP](#configuração-num-cliente-mcp)
 - [Modo HTTP](#modo-http)
@@ -42,6 +43,19 @@ Na pesquisa de texto, cada palavra tem de aparecer no contrato: `query: "softwar
 - **Plano de avisos do Açores 2030** (`acores2030_plano`): janelas de candidatura e tipo de beneficiário. Não traz estado, que vem a `null`.
 
 O estado ("Aberto" ou "Fechado") é o da data do instantâneo da fonte (`snapshot_date`), não o de hoje. Um aviso repartido por vários fundos ou objetivos aparece uma vez por programa, com o montante somado. Nenhuma fonte indica a dimensão da empresa (micro, pequena), por isso não há filtro de dimensão. `beneficiary: "privada"` também encontra avisos para entidades "Pública/Privada".
+
+## Prompts e recurso
+
+Os prompts fornecem instruções ao cliente MCP para consultar as ferramentas e apresentar os resultados com as respetivas fontes. Os argumentos com `?` são opcionais; as datas usam `AAAA-MM-DD`.
+
+| Prompt ou recurso | Argumentos | Utilização |
+| --- | --- | --- |
+| `contratos_entidade` | `entidade`, `desde?`, `ate?` | Obtém até 100 contratos da entidade, lista os maiores valores dentro desses resultados e os fornecedores claramente empresariais. Não conta, ordena nem agrupa pessoas singulares. |
+| `avisos_empresa` | `beneficiario?`, `tema?`, `data?` | Faz duas pesquisas: estado "Aberto" na folha nacional; janela de candidatura e tipo de beneficiário no plano regional. Sem data, usa a data de hoje nos Açores. O estado nacional é o do instantâneo, não o de hoje; não há filtro de dimensão da empresa. |
+| `mapa_mercado` | `tema`, `palavras?`, `desde?` | Faz uma pesquisa por palavra, com até 100 resultados por chamada, elimina duplicados por `id` e resume compradores e valores. `palavras` separa-se por vírgulas; se omitido, usa as palavras de `tema`. |
+| `joraa://fontes` | — | Recurso Markdown com fontes, contagens dos índices, anos importados, datas de atualização e limitações, lido no momento do pedido. Índices indisponíveis ou vazios indicam como importar os dados. |
+
+As pesquisas de contratos devolvem os mais recentes, não os de maior valor. As contagens dos prompts referem-se aos resultados obtidos; quando uma chamada chega a 100, são apresentadas como limites inferiores. Os campos a `null` continuam desconhecidos e não são substituídos por zero. A pesquisa `query` mantém o AND estrito.
 
 ## Início rápido
 
@@ -75,6 +89,19 @@ O índice fica em `data/contracts.sqlite`. Para usar outro caminho, define `JORA
 ## Configuração num cliente MCP
 
 O servidor fala MCP por `stdio`. A configuração genérica, usada pela maioria dos clientes:
+
+```json
+{
+  "mcpServers": {
+    "joraa": {
+      "command": "bun",
+      "args": ["/caminho/para/joraa-mcp/src/index.ts"]
+    }
+  }
+}
+```
+
+No Claude Desktop, o ficheiro `claude_desktop_config.json` fica em `~/Library/Application Support/Claude/` no macOS e em `%APPDATA%\Claude\` no Windows. Usa o mesmo bloco JSON, ajusta o caminho e reinicia a aplicação depois de editar:
 
 ```json
 {

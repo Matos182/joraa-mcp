@@ -109,7 +109,8 @@ test("stdio: esquema 99 é recusado sem alterar o ficheiro nem impedir contratos
   try {
     const result: any = await client.callTool({ name: "avisos_search", arguments: {} });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("esquema 99");
+    expect(result.content[0].text).toContain("não está disponível");
+    expect(result.content[0].text).not.toContain(path);
     expect(result.content[0].text).toContain("bun run ingest:avisos");
     await expectContracts(client);
   } finally {
@@ -184,7 +185,8 @@ test("HTTP: índice opcional ausente ou com erro devolve isError", async () => {
   const message = "O índice tem o esquema 99. Corre `bun run ingest:avisos` para o recriar.";
   const failed = await callHttp(new Error(message));
   expect(failed.isError).toBe(true);
-  expect(failed.content[0].text).toBe(message);
+  expect(failed.content[0].text).toBe("O índice de avisos não está disponível. Corre `bun run ingest:avisos` para o criar.");
+  expect(failed.content[0].text).not.toContain("esquema");
 });
 
 test("HTTP: índice vazio devolve isError", async () => {
